@@ -13,10 +13,14 @@ export async function GET(req: NextRequest) {
   const db = await readDb();
   const canManagePeople = staff.role === "Admin";
   const canReviewRewards = staff.role === "Admin" || staff.role === "Moderator";
-  return NextResponse.json({
-    staff: canManagePeople ? db.staff.map(sanitizeStaff) : [],
-    users: canManagePeople ? db.users.map(sanitizeUser) : [],
-    rewards: canReviewRewards ? db.rewards : [],
-    books: db.books,
-  });
+  return NextResponse.json(
+    {
+      staff: canManagePeople ? db.staff.map(sanitizeStaff) : [],
+      users: canReviewRewards ? db.users.map(sanitizeUser) : [],
+      rewards: canReviewRewards ? db.rewards : [],
+      tokenGrants: canManagePeople ? db.tokenGrants : [],
+      books: db.books,
+    },
+    { headers: { "Cache-Control": "private, no-store, max-age=0" } }
+  );
 }

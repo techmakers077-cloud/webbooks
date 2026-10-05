@@ -45,6 +45,7 @@ const INITIAL_DB: DatabaseSchema = {
   books: DEFAULT_BOOKS,
   unlocks: [],
   rewards: [],
+  tokenGrants: [],
 };
 
 let memoryDbCache: DatabaseSchema | null = null;
@@ -117,6 +118,9 @@ function normalizeDb(value: Partial<DatabaseSchema> | null | undefined): Databas
     rewards: Array.isArray(parsed.rewards)
       ? parsed.rewards.filter((reward) => reward.id !== "reward-demo-01")
       : structuredClone(INITIAL_DB.rewards),
+    tokenGrants: Array.isArray(parsed.tokenGrants)
+      ? parsed.tokenGrants
+      : structuredClone(INITIAL_DB.tokenGrants),
   } as DatabaseSchema;
 }
 

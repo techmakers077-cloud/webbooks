@@ -128,10 +128,22 @@ export interface RewardSubmissionRecord {
   rewardedBy?: string;
 }
 
+export interface TokenGrantRecord {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  tokens: number;
+  reason: string;
+  grantedAt: string;
+  grantedBy: string;
+}
+
 export interface DatabaseSchema {
   users: UserRecord[];
   staff: StaffRecord[];
   books: BookRecord[];
   unlocks: UnlockRecord[];
   rewards: RewardSubmissionRecord[];
+  tokenGrants: TokenGrantRecord[];
 }

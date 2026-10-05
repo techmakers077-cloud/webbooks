@@ -9,7 +9,6 @@ import {
   Coins,
   Smartphone,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import type { BookRecord } from "@/db/schema";
 import type { PublicUser } from "@/lib/auth";
@@ -31,35 +30,6 @@ const TOKEN_PACKAGES = [
   { tokens: 350, amount: 350, label: "Collector Pack" },
 ];
 
-function generateReceiptSvgDataUrl(name: string, phone: string, amount: number): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="680" viewBox="0 0 480 680">
-    <rect width="480" height="680" rx="24" fill="#f8fafc"/>
-    <rect width="480" height="200" rx="24" fill="#1a73e8"/>
-    <circle cx="240" cy="85" r="34" fill="#22c55e"/>
-    <path d="M225 85 l10 10 l22 -22" stroke="#ffffff" stroke-width="5" fill="none" stroke-linecap="round"/>
-    <text x="240" y="150" text-anchor="middle" fill="#ffffff" font-family="sans-serif" font-size="20" font-weight="bold">GPay Transfer Completed</text>
-    <text x="240" y="178" text-anchor="middle" fill="#dbeafe" font-family="sans-serif" font-size="13">To: 9500089956 (WebBooks Token Vault)</text>
-    <rect x="32" y="225" width="416" height="410" rx="18" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
-    <text x="240" y="285" text-anchor="middle" fill="#0f172a" font-family="sans-serif" font-size="42" font-weight="bold">₹${amount}.00</text>
-    <text x="240" y="315" text-anchor="middle" fill="#16a34a" font-family="sans-serif" font-size="14" font-weight="bold">+${amount} WebBooks Tokens</text>
-    <line x1="60" y1="345" x2="420" y2="345" stroke="#e2e8f0" stroke-width="1.5"/>
-    <text x="60" y="385" fill="#64748b" font-family="sans-serif" font-size="14">GPay Recipient</text>
-    <text x="420" y="385" text-anchor="end" fill="#0f172a" font-family="sans-serif" font-size="14" font-weight="bold">9500089956</text>
-    <text x="60" y="425" fill="#64748b" font-family="sans-serif" font-size="14">Sender Name</text>
-    <text x="420" y="425" text-anchor="end" fill="#0f172a" font-family="sans-serif" font-size="14" font-weight="bold">${
-      name || "WebBooks Reader"
-    }</text>
-    <text x="60" y="465" fill="#64748b" font-family="sans-serif" font-size="14">Sender Phone</text>
-    <text x="420" y="465" text-anchor="end" fill="#0f172a" font-family="sans-serif" font-size="14" font-weight="bold">${
-      phone || "9800000000"
-    }</text>
-    <text x="60" y="505" fill="#64748b" font-family="sans-serif" font-size="14">Timestamp</text>
-    <text x="420" y="505" text-anchor="end" fill="#0f172a" font-family="sans-serif" font-size="13">${new Date().toLocaleTimeString()}</text>
-    <rect x="120" y="555" width="240" height="40" rx="20" fill="#f0fdf4" stroke="#bbf7d0"/>
-    <text x="240" y="580" text-anchor="middle" fill="#15803d" font-family="sans-serif" font-size="13" font-weight="bold">✓ UPI Verified Proof</text>
-  </svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
 
 export default function PaymentModal({
   isOpen,
@@ -69,7 +39,6 @@ export default function PaymentModal({
   onSubmitted,
 }: PaymentModalProps) {
   const [copied, setCopied] = useState(false);
-  const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [amount, setAmount] = useState<number>(150);
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string>("");
@@ -77,13 +46,6 @@ export default function PaymentModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
-
-  useEffect(() => {
-    const syncName = window.setTimeout(() => {
-      if (user?.name && !fullName) setFullName(user.name);
-    }, 0);
-    return () => window.clearTimeout(syncName);
-  }, [user, fullName]);
 
   useEffect(() => {
     const syncAmount = window.setTimeout(() => {
@@ -114,6 +76,7 @@ export default function PaymentModal({
     }
 
     setScreenshotFileName(file.name);
+    setScreenshotDataUrl("");
     setError("");
     const reader = new FileReader();
     reader.onload = () => {
@@ -145,29 +108,23 @@ export default function PaymentModal({
     reader.readAsDataURL(file);
   };
 
-  const handleUseGeneratedReceipt = () => {
-    const sampleUrl = generateReceiptSvgDataUrl(
-      fullName || user?.name || "Reader",
-      phone || "9876543210",
-      amount
-    );
-    setScreenshotDataUrl(sampleUrl);
-    setScreenshotFileName(`gpay-receipt-${amount}-tokens.svg`);
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setSuccessMsg("");
 
-    if (!fullName.trim() || !phone.trim()) {
-      setError("Please fill in your Full Name and Phone Number.");
+    if (!user) {
+      setError("Create an account or sign in before submitting a token deposit.");
       return;
     }
-
-    const finalScreenshot =
-      screenshotDataUrl ||
-      generateReceiptSvgDataUrl(fullName.trim(), phone.trim(), amount);
+    if (!phone.trim()) {
+      setError("Please enter the phone number used for your GPay payment.");
+      return;
+    }
+    if (!screenshotDataUrl) {
+      setError("Upload your actual GPay payment screenshot before submitting.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -177,11 +134,11 @@ export default function PaymentModal({
         body: JSON.stringify({
           targetBookId: targetBook?.id,
           targetBookTitle: targetBook?.title,
-          fullName: fullName.trim(),
+          fullName: user.name,
           phone: phone.trim(),
           amount: Number(amount),
           tokensRequested: Number(amount),
-          screenshotUrl: finalScreenshot,
+          screenshotUrl: screenshotDataUrl,
         }),
       });
 
@@ -316,11 +273,13 @@ export default function PaymentModal({
               <input
                 type="text"
                 required
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="Your Full Name"
-                className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#E60023]"
+                value={user?.name || ""}
+                readOnly
+                className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 bg-neutral-100 text-sm"
               />
+              <p className="text-[10px] text-neutral-500 mt-1">
+                Linked to your registered account: {user?.email}
+              </p>
             </div>
 
             <div>
@@ -354,19 +313,9 @@ export default function PaymentModal({
 
           {/* Screenshot Upload Area */}
           <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-bold text-neutral-700">
-                Upload GPay Payment Screenshot *
-              </label>
-              <button
-                type="button"
-                onClick={handleUseGeneratedReceipt}
-                className="text-[11px] font-bold text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 cursor-pointer"
-              >
-                <Sparkles className="w-3 h-3" />
-                Attach Sample GPay Receipt
-              </button>
-            </div>
+            <label className="block text-xs font-bold text-neutral-700 mb-1.5">
+              Upload Actual GPay Payment Screenshot *
+            </label>
 
             <div className="border-2 border-dashed border-neutral-300 hover:border-[#E60023] rounded-2xl p-4 text-center transition bg-neutral-50/60">
               {screenshotDataUrl ? (

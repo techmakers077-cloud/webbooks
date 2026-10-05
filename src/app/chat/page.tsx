@@ -49,6 +49,33 @@ interface ChatMessage {
   modelUsed?: string;
 }
 
+interface ChatAccount {
+  id: string;
+  name: string;
+  email: string;
+}
+
+function createWelcomeMessage(): ChatMessage {
+  return {
+    id: "welcome-msg",
+    role: "assistant",
+    content:
+      "Welcome to the **WebBooks AI Reader Discussion Companion**, powered exclusively by **NVIDIA Nemotron** via OpenRouter.\n\nSelect any book from the catalog on the left, or click a quick-prompt below for in-depth chapter summaries, Socratic Q&A, and thematic discussions.",
+    modelUsed: "NVIDIA Nemotron",
+  };
+}
+
+function isChatMessage(value: unknown): value is ChatMessage {
+  if (!value || typeof value !== "object") return false;
+  const message = value as Partial<ChatMessage>;
+  return (
+    typeof message.id === "string" &&
+    (message.role === "user" || message.role === "assistant") &&
+    typeof message.content === "string" &&
+    (message.modelUsed === undefined || typeof message.modelUsed === "string")
+  );
+}
+
 function ChatCompanionInner() {
   const searchParams = useSearchParams();
   const initialBookId =
@@ -60,21 +87,80 @@ function ChatCompanionInner() {
   const [selectedModel, setSelectedModel] = useState<string>(
     DEFAULT_NEMOTRON_MODELS[0].id
   );
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome-msg",
-      role: "assistant",
-      content:
-        "Welcome to the **WebBooks AI Reader Discussion Companion**, powered exclusively by **NVIDIA Nemotron** via OpenRouter.\n\nSelect any book from the catalog on the left, or click a quick-prompt below for in-depth chapter summaries, Socratic Q&A, and thematic discussions.",
-      modelUsed: "NVIDIA Nemotron",
-    },
-  ]);
+  const [account, setAccount] = useState<ChatAccount | null>(null);
+  const [checkingAccount, setCheckingAccount] = useState(true);
+  const [chatReady, setChatReady] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([createWelcomeMessage()]);
   const [input, setInput] = useState<string>("");
   const [sending, setSending] = useState<boolean>(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch("/api/books")
+    let active = true;
+    fetch("/api/auth/session", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => {
+        if (!active) return;
+        const signedInAccount = data.user;
+        if (
+          signedInAccount &&
+          typeof signedInAccount.id === "string" &&
+          typeof signedInAccount.name === "string" &&
+          typeof signedInAccount.email === "string"
+        ) {
+          const currentAccount = {
+            id: signedInAccount.id,
+            name: signedInAccount.name,
+            email: signedInAccount.email,
+          };
+          setAccount(currentAccount);
+          try {
+            const stored = localStorage.getItem(`webbooks_chat_messages:${currentAccount.id}`);
+            const parsed: unknown = stored ? JSON.parse(stored) : null;
+            const restored = Array.isArray(parsed)
+              ? parsed.filter(
+                  (message): message is ChatMessage =>
+                    isChatMessage(message) && message.content.length <= 20_000
+                ).slice(-80)
+              : [];
+            setMessages(restored.length > 0 ? restored : [createWelcomeMessage()]);
+          } catch {
+            setMessages([createWelcomeMessage()]);
+          }
+        } else {
+          setAccount(null);
+        }
+        setChatReady(true);
+      })
+      .catch(() => {
+        if (active) {
+          setAccount(null);
+          setChatReady(true);
+        }
+      })
+      .finally(() => {
+        if (active) setCheckingAccount(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!chatReady || !account) return;
+    try {
+      localStorage.setItem(
+        `webbooks_chat_messages:${account.id}`,
+        JSON.stringify(messages.slice(-80))
+      );
+    } catch {
+      // Chat remains usable if the browser has disabled local storage.
+    }
+  }, [account, chatReady, messages]);
+
+  useEffect(() => {
+    fetch("/api/books", { cache: "no-store" })
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data.books) && data.books.length > 0) {
@@ -97,7 +183,7 @@ function ChatCompanionInner() {
 
   const sendPrompt = async (promptText: string) => {
     const trimmed = promptText.trim();
-    if (!trimmed || sending) return;
+    if (!account || !trimmed || sending) return;
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -123,6 +209,7 @@ function ChatCompanionInner() {
         }),
       });
       const data = await res.json();
+      if (res.status === 401) setAccount(null);
       if (!res.ok) {
         throw new Error(data.error || "NVIDIA Nemotron could not answer right now.");
       }
@@ -150,6 +237,41 @@ function ChatCompanionInner() {
       setSending(false);
     }
   };
+
+  if (checkingAccount || !chatReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F6F6F6] text-sm font-bold text-neutral-500">
+        Checking your WebBooks account…
+      </div>
+    );
+  }
+
+  if (!account) {
+    return (
+      <main className="min-h-screen bg-[#F6F6F6] flex items-center justify-center p-4">
+        <div className="w-full max-w-lg rounded-3xl border border-neutral-200 bg-white p-8 text-center shadow-xl">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
+            <Sparkles className="h-7 w-7" />
+          </div>
+          <h1 className="text-2xl font-extrabold text-neutral-900">Sign in to use Nemotron Chat</h1>
+          <p className="mt-2 text-sm text-neutral-600">
+            Create a WebBooks account or sign in first. Your reader account, book unlocks, and token balance are kept in the site database; this browser also remembers your chat transcript for this account after a refresh.
+          </p>
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <Link href="/signup" className="rounded-full bg-[#E60023] px-5 py-3 text-sm font-bold text-white hover:bg-[#AD081B]">
+              Create account (+25 tokens)
+            </Link>
+            <Link href="/signin" className="rounded-full bg-neutral-100 px-5 py-3 text-sm font-bold text-neutral-900 hover:bg-neutral-200">
+              Sign in
+            </Link>
+            <Link href="/" className="w-full text-xs font-bold text-neutral-500 hover:text-neutral-900">
+              Back to the book feed
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F6F6F6] flex flex-col">

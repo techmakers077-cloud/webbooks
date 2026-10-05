@@ -5,8 +5,8 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const user = await getSessionUser(req);
-  if (!user) {
-    return NextResponse.json({ user: null });
-  }
-  return NextResponse.json({ user: sanitizeUser(user) });
+  return NextResponse.json(
+    { user: user ? sanitizeUser(user) : null },
+    { headers: { "Cache-Control": "private, no-store, max-age=0" } }
+  );
 }

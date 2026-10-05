@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { persistPaymentProof, readDb, writeDb } from "@/db";
-import {
-  getSessionUser,
-  requireStaff,
-  sanitizeUser,
-  setUserSessionCookie,
-} from "@/lib/auth";
+import { getSessionUser, requireStaff, sanitizeUser } from "@/lib/auth";
 import { generateId } from "@/lib/utils";
-import { hashPassword } from "@/lib/password";
 import type { RewardSubmissionRecord } from "@/db/schema";
 
 export const dynamic = "force-dynamic";
@@ -18,26 +12,32 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Staff access required." }, { status: 403 });
   }
   const db = await readDb();
-  return NextResponse.json({ rewards: db.rewards });
+  return NextResponse.json(
+    { rewards: db.rewards },
+    { headers: { "Cache-Control": "private, no-store, max-age=0" } }
+  );
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
     const sessionUser = await getSessionUser(req);
-    const fullName =
-      (typeof body.fullName === "string" ? body.fullName.trim() : "") ||
-      sessionUser?.name ||
-      "Reader";
+    if (!sessionUser) {
+      return NextResponse.json(
+        { error: "Create an account or sign in before submitting a token deposit.", code: "AUTH_REQUIRED" },
+        { status: 401 }
+      );
+    }
+
+    const body = await req.json();
     const phone = typeof body.phone === "string" ? body.phone.trim() : "";
     const amount = Number(body.amount ?? 100);
     const tokensRequested = Number(body.tokensRequested ?? amount);
     const screenshotUrl =
       typeof body.screenshotUrl === "string" ? body.screenshotUrl.trim() : "";
 
-    if (!fullName || !phone) {
+    if (!sessionUser.name || !phone) {
       return NextResponse.json(
-        { error: "Please provide your full name and phone number." },
+        { error: "Please provide the phone number used for your GPay payment." },
         { status: 400 }
       );
     }
@@ -48,8 +48,8 @@ export async function POST(req: NextRequest) {
       );
     }
     if (
-      !Number.isFinite(amount) ||
-      !Number.isFinite(tokensRequested) ||
+      !Number.isInteger(amount) ||
+      !Number.isInteger(tokensRequested) ||
       amount < 1 ||
       tokensRequested < 1 ||
       amount > 100_000 ||
@@ -60,9 +60,9 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    if (!screenshotUrl || !screenshotUrl.startsWith("data:image/")) {
+    if (!/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/i.test(screenshotUrl)) {
       return NextResponse.json(
-        { error: "Please upload your GPay payment screenshot proof." },
+        { error: "Please upload a valid JPG, PNG, or WebP GPay payment screenshot." },
         { status: 400 }
       );
     }
@@ -74,19 +74,12 @@ export async function POST(req: NextRequest) {
     }
 
     const db = await readDb();
-    let linkedUser = sessionUser;
+    const linkedUser = db.users.find((candidate) => candidate.id === sessionUser.id);
     if (!linkedUser) {
-      const guestId = generateId("user");
-      linkedUser = {
-        id: guestId,
-        name: fullName,
-        email: `guest-${guestId}@webbooks.invalid`,
-        passwordHash: hashPassword(generateId("private")),
-        tokens: 25,
-        unlockedBookIds: [],
-        createdAt: new Date().toISOString(),
-      };
-      db.users.push(linkedUser);
+      return NextResponse.json(
+        { error: "Your account is no longer available. Please sign in again.", code: "AUTH_REQUIRED" },
+        { status: 401 }
+      );
     }
 
     const rewardId = generateId("reward");
@@ -98,7 +91,7 @@ export async function POST(req: NextRequest) {
       targetBookId: typeof body.targetBookId === "string" ? body.targetBookId : undefined,
       targetBookTitle:
         typeof body.targetBookTitle === "string" ? body.targetBookTitle : undefined,
-      fullName,
+      fullName: linkedUser.name,
       phone,
       amount: Math.floor(amount),
       tokensRequested: Math.floor(tokensRequested),
@@ -116,7 +109,6 @@ export async function POST(req: NextRequest) {
       message:
         "Payment proof submitted! Open Staff Console → Rewards Engine to approve and credit tokens.",
     });
-    if (!sessionUser) setUserSessionCookie(res, linkedUser.id);
     return res;
   } catch (err: any) {
     return NextResponse.json(
@@ -143,9 +135,12 @@ export async function PATCH(req: NextRequest) {
         { status: 400 }
       );
     }
-    if (body.tokensToReward !== undefined && (!Number.isFinite(requestedTokens) || requestedTokens < 1 || requestedTokens > 100_000)) {
+    if (
+      body.tokensToReward !== undefined &&
+      (!Number.isInteger(requestedTokens) || requestedTokens < 1 || requestedTokens > 100_000)
+    ) {
       return NextResponse.json(
-        { error: "Token credit must be between 1 and 100,000." },
+        { error: "Token credit must be a whole number between 1 and 100,000." },
         { status: 400 }
       );
     }
@@ -180,19 +175,13 @@ export async function PATCH(req: NextRequest) {
       );
     }
     if (!user) {
-      const guestId = generateId("user");
-      user = {
-        id: guestId,
-        name: reward.fullName,
-        email: `guest-${guestId}@webbooks.invalid`,
-        passwordHash: hashPassword(generateId("private")),
-        tokens: 25,
-        unlockedBookIds: [],
-        createdAt: new Date().toISOString(),
-      };
-      db.users.push(user);
-      reward.userId = user.id;
-      reward.userEmail = user.email;
+      return NextResponse.json(
+        {
+          error: "No registered account is linked to this payment. Select the correct reader in the direct token reward section instead.",
+          code: "UNLINKED_ACCOUNT",
+        },
+        { status: 409 }
+      );
     }
 
     user.tokens = (user.tokens || 0) + tokensToCredit;

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import confetti from "canvas-confetti";
 import {
   Coins,
@@ -27,11 +28,12 @@ import type { PublicUser, PublicStaff } from "@/lib/auth";
 type SortMode = "curated" | "tokens-asc" | "rating-desc" | "reads-desc";
 
 export default function HomePage() {
+  const router = useRouter();
   const [books, setBooks] = useState<BookRecord[]>(INITIAL_BOOKS);
   const [user, setUser] = useState<PublicUser | null>(null);
   const [staff, setStaff] = useState<PublicStaff | null>(null);
   const [pendingRewardsCount, setPendingRewardsCount] = useState<number>(0);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
 
   // Filters & Sorting
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -68,12 +70,25 @@ export default function HomePage() {
     }
   };
 
+  const requireAccount = (feature: string): boolean => {
+    if (user) return true;
+    showToast(`Create an account or sign in to ${feature}.`);
+    router.push("/signup");
+    return false;
+  };
+
+  const openPayment = (targetBook: BookRecord | null = null) => {
+    if (!requireAccount("use token deposits")) return;
+    setPaymentTargetBook(targetBook);
+    setPaymentModalOpen(true);
+  };
+
   const refreshAllData = useCallback(async () => {
     try {
       const [booksRes, sessionRes, staffRes] = await Promise.all([
-        fetch("/api/books"),
-        fetch("/api/auth/session"),
-        fetch("/api/staff/auth"),
+        fetch("/api/books", { cache: "no-store" }),
+        fetch("/api/auth/session", { cache: "no-store" }),
+        fetch("/api/staff/auth", { cache: "no-store" }),
       ]);
 
       const booksData = await booksRes.json();
@@ -82,7 +97,23 @@ export default function HomePage() {
       }
 
       const sessionData = await sessionRes.json();
-      setUser(sessionData.user || null);
+      const signedInUser = (sessionData.user || null) as PublicUser | null;
+      setUser(signedInUser);
+      if (signedInUser) {
+        try {
+          const saved = localStorage.getItem(`webbooks_saved_pins:${signedInUser.id}`);
+          const savedIds = saved ? JSON.parse(saved) : [];
+          setSavedBookIds(
+            Array.isArray(savedIds)
+              ? savedIds.filter((id): id is string => typeof id === "string")
+              : []
+          );
+        } catch {
+          setSavedBookIds([]);
+        }
+      } else {
+        setSavedBookIds([]);
+      }
 
       const staffData = await staffRes.json();
       if (staffData.staff) {
@@ -110,22 +141,21 @@ export default function HomePage() {
   useEffect(() => {
     const initialLoad = window.setTimeout(() => {
       void refreshAllData();
-      try {
-        const rawSaved = localStorage.getItem("webbooks_saved_pins");
-        if (rawSaved) setSavedBookIds(JSON.parse(rawSaved));
-      } catch {}
     }, 0);
     return () => window.clearTimeout(initialLoad);
   }, [refreshAllData]);
 
   const handleToggleSavePin = (bookId: string) => {
+    if (!requireAccount("save a book to your reading list")) return;
     setSavedBookIds((prev) => {
       const exists = prev.includes(bookId);
       const next = exists
         ? prev.filter((id) => id !== bookId)
         : [...prev, bookId];
-      if (typeof window !== "undefined") {
-        localStorage.setItem("webbooks_saved_pins", JSON.stringify(next));
+      try {
+        localStorage.setItem(`webbooks_saved_pins:${user!.id}`, JSON.stringify(next));
+      } catch {
+        showToast("Your browser could not save this reading-list change.");
       }
       showToast(
         exists ? "Removed from your Saved Pins." : "📌 Pinned to your Reading List!"
@@ -137,10 +167,13 @@ export default function HomePage() {
   const handleLogout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     setUser(null);
+    setSavedBookIds([]);
+    setPaymentModalOpen(false);
     showToast("Signed out of your reader account.");
   };
 
   const handleUnlockOrRead = async (book: BookRecord) => {
+    if (!requireAccount("unlock or read full books")) return;
     const isAlreadyUnlocked = Boolean(
       user?.unlockedBookIds?.includes(book.id)
     );
@@ -161,8 +194,7 @@ export default function HomePage() {
 
     // If user does not have enough tokens, automatically open GPay payment dialog
     if (currentTokens < book.tokenCost) {
-      setPaymentTargetBook(book);
-      setPaymentModalOpen(true);
+      openPayment(book);
       return;
     }
 
@@ -176,8 +208,7 @@ export default function HomePage() {
       const data = await res.json();
 
       if (res.status === 402 || data.code === "INSUFFICIENT_TOKENS") {
-        setPaymentTargetBook(book);
-        setPaymentModalOpen(true);
+        openPayment(book);
         return;
       }
 
@@ -259,10 +290,7 @@ export default function HomePage() {
         onSearchChange={setSearchQuery}
         user={user}
         staff={staff}
-        onOpenPayment={() => {
-          setPaymentTargetBook(null);
-          setPaymentModalOpen(true);
-        }}
+        onOpenPayment={() => openPayment()}
         onOpenStaffConsole={() => setStaffConsoleOpen(true)}
         onLogout={handleLogout}
         pendingRewardsCount={pendingRewardsCount}
@@ -367,10 +395,7 @@ export default function HomePage() {
                 <span>Open Nemotron AI Chat</span>
               </Link>
               <button
-                onClick={() => {
-                  setPaymentTargetBook(null);
-                  setPaymentModalOpen(true);
-                }}
+                onClick={() => openPayment()}
                 className="text-xs font-extrabold text-[#E60023] hover:underline cursor-pointer"
               >
                 + Deposit Tokens via GPay (9500089956)
@@ -481,10 +506,7 @@ export default function HomePage() {
           <div className="flex flex-wrap items-center gap-4 font-semibold">
             <button
               type="button"
-              onClick={() => {
-                setPaymentTargetBook(null);
-                setPaymentModalOpen(true);
-              }}
+              onClick={() => openPayment()}
               className="hover:text-[#E60023] inline-flex items-center gap-1 cursor-pointer"
             >
               <Smartphone className="w-3.5 h-3.5" />
@@ -516,21 +538,24 @@ export default function HomePage() {
       />
 
       {/* GPay 9500089956 Token Deposit & Screenshot Proof Modal */}
-      <PaymentModal
-        isOpen={paymentModalOpen}
-        onClose={() => setPaymentModalOpen(false)}
-        user={user}
-        targetBook={paymentTargetBook}
-        onSubmitted={(updatedUser) => {
-          if (updatedUser) {
-            setUser(updatedUser);
-          }
-          refreshAllData();
-          showToast(
-            "GPay screenshot submitted! Open Staff Console → Rewards Engine to credit tokens."
-          );
-        }}
-      />
+      {paymentModalOpen && user && (
+        <PaymentModal
+          key={`${user.id}:${paymentTargetBook?.id || "deposit"}`}
+          isOpen={true}
+          onClose={() => setPaymentModalOpen(false)}
+          user={user}
+          targetBook={paymentTargetBook}
+          onSubmitted={(updatedUser) => {
+            if (updatedUser) {
+              setUser(updatedUser);
+            }
+            refreshAllData();
+            showToast(
+              "GPay screenshot submitted! Open Staff Console → Rewards Engine to credit tokens."
+            );
+          }}
+        />
+      )}
 
       {/* Staff Console Modal (Rewards Engine, Create Engine, Staff & People) */}
       <StaffConsoleModal

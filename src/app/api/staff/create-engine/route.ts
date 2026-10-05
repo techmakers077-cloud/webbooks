@@ -35,13 +35,13 @@ export async function POST(req: NextRequest) {
     }
     const db = await readDb();
 
-    let title = (body.title || "").trim();
-    let author = (body.author || "").trim();
-    let category = (body.category || "").trim();
+    let title = typeof body.title === "string" ? body.title.trim() : "";
+    let author = typeof body.author === "string" ? body.author.trim() : "";
+    let category = typeof body.category === "string" ? body.category.trim() : "";
     let tokenCost = body.tokenCost !== undefined ? Number(body.tokenCost) : 150;
-    let preview = (body.preview || "").trim();
-    let content = (body.content || "").trim();
-    let coverUrl = (body.coverUrl || "").trim();
+    let preview = typeof body.preview === "string" ? body.preview.trim() : "";
+    let content = typeof body.content === "string" ? body.content.trim() : "";
+    let coverUrl = typeof body.coverUrl === "string" ? body.coverUrl.trim() : "";
     let tags: string[] = [];
 
     // If raw file content & fileName were uploaded, auto-extract fields if not explicitly overridden
@@ -110,7 +110,12 @@ export async function POST(req: NextRequest) {
 
     author = author || "WebBooks Editorial";
     category = category || "AI & Philosophy";
-    tokenCost = Number.isFinite(tokenCost) && tokenCost >= 0 ? tokenCost : 150;
+    if (!Number.isInteger(tokenCost) || tokenCost < 0 || tokenCost > 100_000) {
+      return NextResponse.json(
+        { error: "Book token cost must be a whole number between 0 and 100,000." },
+        { status: 400 }
+      );
+    }
     content = content || preview || `Full manuscript for ${title} by ${author}.`;
     preview =
       preview ||
@@ -134,31 +139,44 @@ export async function POST(req: NextRequest) {
 
     const chapters = parseChaptersFromContent(title, content);
 
-    // Check if targetBookId is passed to update an existing book ("update anything from a file it goes")
-    if (body.targetBookId && body.targetBookId !== "new") {
-      const idx = db.books.findIndex((b) => b.id === body.targetBookId);
-      if (idx !== -1) {
-        const updatedBook: BookRecord = {
-          ...db.books[idx],
-          title,
-          author,
-          category,
-          tokenCost,
-          coverUrl,
-          preview,
-          content,
-          chapters,
-          tags,
-          pages: Math.max(32, chapters.length * 45),
-        };
-        db.books[idx] = updatedBook;
-        await writeDb(db);
-        return NextResponse.json({
+    // The console sends targetBookId for an update; reject stale IDs instead of
+    // silently publishing a duplicate as a new book.
+    const targetBookId =
+      typeof body.targetBookId === "string" && body.targetBookId !== "new"
+        ? body.targetBookId
+        : "";
+    if (targetBookId) {
+      const idx = db.books.findIndex((book) => book.id === targetBookId);
+      if (idx === -1) {
+        return NextResponse.json(
+          { error: "The selected book no longer exists. Refresh the staff console and try again." },
+          { status: 404 }
+        );
+      }
+
+      const updatedBook: BookRecord = {
+        ...db.books[idx],
+        title,
+        author,
+        category,
+        tokenCost,
+        coverUrl,
+        preview,
+        content,
+        chapters,
+        tags,
+        pages: Math.max(32, chapters.length * 45),
+      };
+      db.books[idx] = updatedBook;
+      await writeDb(db);
+      return NextResponse.json(
+        {
           book: updatedBook,
           updated: true,
           message: `Updated "${updatedBook.title}" on the live Pinterest feed!`,
-        });
-      }
+        },
+        { headers: { "Cache-Control": "private, no-store, max-age=0" } }
+      );
     }
 
     const newBook: BookRecord = {
@@ -182,11 +200,14 @@ export async function POST(req: NextRequest) {
     db.books.unshift(newBook);
     await writeDb(db);
 
-    return NextResponse.json({
-      book: newBook,
-      created: true,
-      message: `Published "${newBook.title}" (${newBook.tokenCost} tokens) to the live Pinterest feed!`,
-    });
+    return NextResponse.json(
+      {
+        book: newBook,
+        created: true,
+        message: `Published "${newBook.title}" (${newBook.tokenCost} tokens) to the live Pinterest feed!`,
+      },
+      { headers: { "Cache-Control": "private, no-store, max-age=0" } }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { error: err?.message || "Create Engine failed to process document." },

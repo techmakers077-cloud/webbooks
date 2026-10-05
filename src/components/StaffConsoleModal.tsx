@@ -20,7 +20,11 @@ import {
   BookOpen,
 } from "lucide-react";
 import type { PublicStaff, PublicUser } from "@/lib/auth";
-import type { BookRecord, RewardSubmissionRecord } from "@/db/schema";
+import type {
+  BookRecord,
+  RewardSubmissionRecord,
+  TokenGrantRecord,
+} from "@/db/schema";
 import { formatDateTime, formatTokens } from "@/lib/utils";
 
 interface StaffConsoleModalProps {
@@ -52,7 +56,12 @@ export default function StaffConsoleModal({
   const [rewards, setRewards] = useState<RewardSubmissionRecord[]>([]);
   const [staffList, setStaffList] = useState<PublicStaff[]>([]);
   const [usersList, setUsersList] = useState<PublicUser[]>([]);
+  const [tokenGrants, setTokenGrants] = useState<TokenGrantRecord[]>([]);
   const [booksList, setBooksList] = useState<BookRecord[]>([]);
+  const [selectedRewardUserId, setSelectedRewardUserId] = useState("");
+  const [manualRewardTokens, setManualRewardTokens] = useState(100);
+  const [manualRewardReason, setManualRewardReason] = useState("");
+  const [rewardingUserId, setRewardingUserId] = useState<string | null>(null);
   const [loadingData, setLoadingData] = useState(false);
   const [bannerMsg, setBannerMsg] = useState("");
 
@@ -88,12 +97,14 @@ export default function StaffConsoleModal({
   const fetchStaffSnapshot = async () => {
     setLoadingData(true);
     try {
-      const res = await fetch("/api/staff");
+      const res = await fetch("/api/staff", { cache: "no-store" });
       const data = await res.json();
-      if (data.rewards) setRewards(data.rewards);
-      if (data.staff) setStaffList(data.staff);
-      if (data.users) setUsersList(data.users);
-      if (data.books) setBooksList(data.books);
+      if (!res.ok) throw new Error(data.error || "Staff data could not be loaded.");
+      if (Array.isArray(data.rewards)) setRewards(data.rewards);
+      if (Array.isArray(data.staff)) setStaffList(data.staff);
+      if (Array.isArray(data.users)) setUsersList(data.users);
+      if (Array.isArray(data.tokenGrants)) setTokenGrants(data.tokenGrants);
+      if (Array.isArray(data.books)) setBooksList(data.books);
     } catch (err) {
       console.error("Failed to fetch staff snapshot:", err);
     } finally {
@@ -129,6 +140,7 @@ export default function StaffConsoleModal({
         throw new Error(data.error || "Authentication failed.");
       }
       onStaffAuthChange(data.staff);
+      setActiveTab("rewards");
       setBannerMsg(data.message || "Staff Console unlocked!");
       fetchStaffSnapshot();
     } catch (err: any) {
@@ -141,6 +153,7 @@ export default function StaffConsoleModal({
   const handleStaffLogout = async () => {
     await fetch("/api/staff/auth", { method: "DELETE" });
     onStaffAuthChange(null);
+    setActiveTab("rewards");
     setBannerMsg("");
   };
 
@@ -343,27 +356,51 @@ Curate your mental models with care. Read deeply, question assumptions, and buil
     }
   };
 
-  const handleQuickCreditUser = async (userId: string, tokens: number) => {
+  const handleRewardSelectedUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const selectedUser = usersList.find((reader) => reader.id === selectedRewardUserId);
+    if (!selectedUser) {
+      setBannerMsg("Select a registered reader before awarding tokens.");
+      return;
+    }
+    if (!Number.isInteger(manualRewardTokens) || manualRewardTokens < 1 || manualRewardTokens > 100_000) {
+      setBannerMsg("Enter a whole-number reward between 1 and 100,000 tokens.");
+      return;
+    }
+
+    setRewardingUserId(selectedUser.id);
+    setBannerMsg("");
     try {
       const res = await fetch("/api/staff/members", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "credit_user",
-          userId,
-          tokens,
+          userId: selectedUser.id,
+          tokens: manualRewardTokens,
+          reason: manualRewardReason,
         }),
       });
       const data = await res.json();
-      if (res.ok) {
-        setBannerMsg(data.message);
-        await fetchStaffSnapshot();
-        onDataMutated();
-      }
-    } catch (err) {
-      console.error(err);
+      if (!res.ok) throw new Error(data.error || "Could not reward this account.");
+      setBannerMsg(data.message || `Rewarded ${manualRewardTokens} tokens to ${selectedUser.name}.`);
+      setManualRewardReason("");
+      await fetchStaffSnapshot();
+      onDataMutated(data.user);
+    } catch (err: any) {
+      setBannerMsg(err?.message || "Could not reward this account.");
+    } finally {
+      setRewardingUserId(null);
     }
   };
+
+  const selectReaderForReward = (userId: string) => {
+    setSelectedRewardUserId(userId);
+    setActiveTab("rewards");
+  };
+  const selectedRewardUser = usersList.find(
+    (reader) => reader.id === selectedRewardUserId
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-3 sm:p-6 overflow-y-auto animate-fadeIn">
@@ -495,29 +532,33 @@ Curate your mental models with care. Read deeply, question assumptions, and buil
                 </span>
               </button>
 
-              <button
-                onClick={() => setActiveTab("create")}
-                className={`px-5 py-3 rounded-t-2xl font-bold text-xs sm:text-sm flex items-center gap-2 transition cursor-pointer ${
-                  activeTab === "create"
-                    ? "bg-white text-[#E60023] shadow-2xs border-t border-x border-neutral-200"
-                    : "text-neutral-600 hover:text-neutral-900"
-                }`}
-              >
-                <FileUp className="w-4 h-4" />
-                <span>Create Engine (File Upload)</span>
-              </button>
+              {(staff.role === "Admin" || staff.role === "Editor") && (
+                <button
+                  onClick={() => setActiveTab("create")}
+                  className={`px-5 py-3 rounded-t-2xl font-bold text-xs sm:text-sm flex items-center gap-2 transition cursor-pointer ${
+                    activeTab === "create"
+                      ? "bg-white text-[#E60023] shadow-2xs border-t border-x border-neutral-200"
+                      : "text-neutral-600 hover:text-neutral-900"
+                  }`}
+                >
+                  <FileUp className="w-4 h-4" />
+                  <span>Create Engine (File Upload)</span>
+                </button>
+              )}
 
-              <button
-                onClick={() => setActiveTab("people")}
-                className={`px-5 py-3 rounded-t-2xl font-bold text-xs sm:text-sm flex items-center gap-2 transition cursor-pointer ${
-                  activeTab === "people"
-                    ? "bg-white text-[#E60023] shadow-2xs border-t border-x border-neutral-200"
-                    : "text-neutral-600 hover:text-neutral-900"
-                }`}
-              >
-                <Users className="w-4 h-4" />
-                <span>Staff & People ({staffList.length})</span>
-              </button>
+              {staff.role === "Admin" && (
+                <button
+                  onClick={() => setActiveTab("people")}
+                  className={`px-5 py-3 rounded-t-2xl font-bold text-xs sm:text-sm flex items-center gap-2 transition cursor-pointer ${
+                    activeTab === "people"
+                      ? "bg-white text-[#E60023] shadow-2xs border-t border-x border-neutral-200"
+                      : "text-neutral-600 hover:text-neutral-900"
+                  }`}
+                >
+                  <Users className="w-4 h-4" />
+                  <span>Staff & People ({staffList.length})</span>
+                </button>
+              )}
             </div>
 
             {bannerMsg && (
@@ -540,14 +581,125 @@ Curate your mental models with care. Read deeply, question assumptions, and buil
                 </div>
               ) : activeTab === "rewards" ? (
                 /* TAB 1: REWARDS ENGINE */
-                <div className="space-y-4">
+                <div className="space-y-5">
+                  {staff.role === "Admin" && (
+                    <section className="p-5 rounded-2xl border border-emerald-200 bg-emerald-50/60 space-y-4">
+                      <div>
+                        <h3 className="font-extrabold text-base text-neutral-900">
+                          Reward a specific registered reader
+                        </h3>
+                        <p className="text-xs text-neutral-600 mt-1">
+                          Choose the reader by account. The award is saved to that account’s balance and recorded in the reward history.
+                        </p>
+                      </div>
+
+                      {usersList.length === 0 ? (
+                        <p className="p-4 rounded-xl bg-white border border-dashed border-emerald-200 text-xs text-neutral-500">
+                          No registered accounts yet. Readers must sign up before tokens can be awarded.
+                        </p>
+                      ) : (
+                        <form onSubmit={handleRewardSelectedUser} className="space-y-3">
+                          <div className="grid grid-cols-1 md:grid-cols-[minmax(0,2fr)_minmax(140px,1fr)] gap-3">
+                            <div>
+                              <label className="block text-xs font-bold text-neutral-700 mb-1">
+                                Registered reader
+                              </label>
+                              <select
+                                required
+                                value={selectedRewardUserId}
+                                onChange={(e) => setSelectedRewardUserId(e.target.value)}
+                                className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 bg-white text-sm font-semibold"
+                              >
+                                <option value="">Select a reader by name and email…</option>
+                                {usersList.map((reader) => (
+                                  <option key={reader.id} value={reader.id}>
+                                    {reader.name} — {reader.email} · Joined {formatDateTime(reader.createdAt)} · {formatTokens(reader.tokens)} tokens
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-neutral-700 mb-1">
+                                Tokens to award
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={100000}
+                                step={1}
+                                required
+                                value={manualRewardTokens}
+                                onChange={(e) => setManualRewardTokens(Number(e.target.value))}
+                                className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 bg-white text-sm font-bold"
+                              />
+                            </div>
+                          </div>
+
+                          {selectedRewardUser && (
+                            <div className="p-3.5 rounded-xl bg-white border border-emerald-200 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                              <span><strong>Selected account:</strong> {selectedRewardUser.name}</span>
+                              <span><strong>Email:</strong> {selectedRewardUser.email}</span>
+                              <span><strong>Signed up:</strong> {formatDateTime(selectedRewardUser.createdAt)}</span>
+                              <span><strong>Current balance:</strong> {formatTokens(selectedRewardUser.tokens)} tokens</span>
+                              <span><strong>Unlocked books:</strong> {selectedRewardUser.unlockedBookIds?.length || 0}</span>
+                              <span className="font-mono text-[10px] text-neutral-500 break-all"><strong>Account ID:</strong> {selectedRewardUser.id}</span>
+                            </div>
+                          )}
+
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              type="text"
+                              maxLength={240}
+                              value={manualRewardReason}
+                              onChange={(e) => setManualRewardReason(e.target.value)}
+                              placeholder="Reason (optional), e.g. contest reward"
+                              className="flex-1 px-3.5 py-2.5 rounded-xl border border-neutral-300 bg-white text-sm"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!selectedRewardUser || rewardingUserId !== null}
+                              className="px-5 py-2.5 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs inline-flex items-center justify-center gap-2 disabled:opacity-50"
+                            >
+                              <Coins className="w-4 h-4" />
+                              {rewardingUserId === selectedRewardUserId
+                                ? "Rewarding…"
+                                : selectedRewardUser
+                                  ? `Reward ${manualRewardTokens} tokens to ${selectedRewardUser.name}`
+                                  : "Select reader to reward"}
+                            </button>
+                          </div>
+                        </form>
+                      )}
+
+                      <div className="border-t border-emerald-200 pt-3">
+                        <h4 className="text-xs font-extrabold text-neutral-800 mb-2">
+                          Recent direct rewards
+                        </h4>
+                        {tokenGrants.length === 0 ? (
+                          <p className="text-[11px] text-neutral-500">No direct account rewards yet.</p>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {tokenGrants.slice(0, 5).map((grant) => (
+                              <div key={grant.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] text-neutral-600">
+                                <span className="font-semibold text-neutral-800">
+                                  {grant.userName} · {grant.userEmail} · +{grant.tokens} tokens
+                                </span>
+                                <span>{grant.reason} · {formatDateTime(grant.grantedAt)} · by {grant.grantedBy}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                  )}
+
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="font-extrabold text-base text-neutral-900">
                         Incoming GPay Screenshot Submissions (9500089956)
                       </h3>
                       <p className="text-xs text-neutral-500">
-                        Click any screenshot thumbnail to inspect full resolution. Click &ldquo;Reward Tokens&rdquo; to immediately credit the reader.
+                        Click any screenshot thumbnail to inspect full resolution. Approved deposits are credited to the registered account that submitted them.
                       </p>
                     </div>
                   </div>
@@ -558,7 +710,13 @@ Curate your mental models with care. Read deeply, question assumptions, and buil
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {rewards.map((item) => (
+                      {rewards.map((item) => {
+                        const linkedUser =
+                          usersList.find((reader) => reader.id === item.userId) ||
+                          usersList.find(
+                            (reader) => reader.email.toLowerCase() === item.userEmail?.toLowerCase()
+                          );
+                        return (
                         <div
                           key={item.id}
                           className="p-4 rounded-2xl border border-neutral-200 bg-neutral-50/60 hover:bg-white transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
@@ -616,8 +774,14 @@ Curate your mental models with care. Read deeply, question assumptions, and buil
                                   <Clock className="w-3 h-3" />
                                   {formatDateTime(item.createdAt)}
                                 </span>
-                                {item.userEmail && (
-                                  <span>Account: {item.userEmail}</span>
+                                {linkedUser ? (
+                                  <span>
+                                    Registered account: {linkedUser.name} · {linkedUser.email} · Joined {formatDateTime(linkedUser.createdAt)} · Balance {formatTokens(linkedUser.tokens)} tokens
+                                  </span>
+                                ) : (
+                                  <span className="text-rose-600">
+                                    No matching registered account ({item.userEmail || "unlinked payment"})
+                                  </span>
                                 )}
                               </div>
                             </div>
@@ -649,17 +813,20 @@ Curate your mental models with care. Read deeply, question assumptions, and buil
                               <button
                                 type="button"
                                 onClick={() => handleRewardTokens(item)}
-                                className="px-4 py-2.5 rounded-full bg-[#E60023] hover:bg-[#AD081B] text-white font-extrabold text-xs inline-flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                                disabled={!linkedUser}
+                                title={linkedUser ? `Credit ${linkedUser.name}'s account` : "No registered account is linked to this payment"}
+                                className="px-4 py-2.5 rounded-full bg-[#E60023] hover:bg-[#AD081B] text-white font-extrabold text-xs inline-flex items-center gap-1.5 shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed"
                               >
                                 <Coins className="w-3.5 h-3.5" />
                                 <span>
-                                  Reward {item.tokensRequested} Tokens
+                                  {linkedUser ? `Reward ${item.tokensRequested} Tokens` : "Account not linked"}
                                 </span>
                               </button>
                             )}
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -982,9 +1149,14 @@ Curate your mental models with care. Read deeply, question assumptions, and buil
 
                   {/* Right: Registered Readers & Token Balances */}
                   <div className="space-y-4">
-                    <h3 className="font-extrabold text-base text-neutral-900">
-                      Registered Readers ({usersList.length})
-                    </h3>
+                    <div>
+                      <h3 className="font-extrabold text-base text-neutral-900">
+                        Registered Readers ({usersList.length})
+                      </h3>
+                      <p className="text-[11px] text-neutral-500 mt-0.5">
+                        Account name, email, signup date, ID, balance, and unlocks. Passwords are never shown.
+                      </p>
+                    </div>
                     <div className="space-y-2.5">
                       {usersList.map((u) => (
                         <div
@@ -1000,7 +1172,10 @@ Curate your mental models with care. Read deeply, question assumptions, and buil
                                 {u.name}
                               </div>
                               <div className="text-[11px] text-neutral-500 truncate">
-                                {u.email} · {u.unlockedBookIds?.length || 0} books unlocked
+                                {u.email}
+                              </div>
+                              <div className="text-[10px] text-neutral-400">
+                                Signed up {formatDateTime(u.createdAt)} · {u.unlockedBookIds?.length || 0} books unlocked · ID {u.id}
                               </div>
                             </div>
                           </div>
@@ -1011,11 +1186,12 @@ Curate your mental models with care. Read deeply, question assumptions, and buil
                             </span>
                             <button
                               type="button"
-                              onClick={() => handleQuickCreditUser(u.id, 100)}
-                              className="px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold transition cursor-pointer"
-                              title="Grant +100 Bonus Tokens"
+                              onClick={() => selectReaderForReward(u.id)}
+                              className="px-3 py-1.5 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-bold transition cursor-pointer inline-flex items-center gap-1"
+                              title={`Select ${u.name} to reward`}
                             >
-                              +100 🪙
+                              <Coins className="w-3 h-3" />
+                              Reward
                             </button>
                           </div>
                         </div>

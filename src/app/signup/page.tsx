@@ -113,9 +113,10 @@ export default function SignUpPage() {
               type="password"
               required
               minLength={8}
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Create a password (min 4 chars)"
+              placeholder="Create a password (min 8 characters)"
               className="w-full px-4 py-3 rounded-2xl border border-neutral-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#E60023]"
             />
           </div>

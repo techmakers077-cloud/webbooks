@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readDb } from "@/db";
+import { getSessionUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -149,6 +150,14 @@ Drawing from **${title}** by **${author}** (*${
 
 export async function POST(req: NextRequest) {
   try {
+    const user = await getSessionUser(req);
+    if (!user) {
+      return NextResponse.json(
+        { error: "Create an account or sign in to use the NVIDIA Nemotron chat.", code: "AUTH_REQUIRED" },
+        { status: 401, headers: { "Cache-Control": "private, no-store, max-age=0" } }
+      );
+    }
+
     const body = await req.json();
     const messages = Array.isArray(body.messages) ? body.messages : [];
     const bookId = body.bookId;

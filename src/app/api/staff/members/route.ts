@@ -35,17 +35,32 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "User not found." }, { status: 404 });
       }
       const delta = Number(body.tokens);
-      if (!Number.isFinite(delta) || delta <= 0 || delta > 100_000) {
+      if (!Number.isInteger(delta) || delta < 1 || delta > 100_000) {
         return NextResponse.json(
-          { error: "Token credit must be between 1 and 100,000." },
+          { error: "Token credit must be a whole number between 1 and 100,000." },
           { status: 400 }
         );
       }
-      db.users[idx].tokens = (db.users[idx].tokens || 0) + Math.floor(delta);
+      const user = db.users[idx];
+      const grantedAt = new Date().toISOString();
+      const reason =
+        (typeof body.reason === "string" ? body.reason.trim() : "").slice(0, 240) ||
+        "Staff token reward";
+      user.tokens = (user.tokens || 0) + delta;
+      db.tokenGrants.unshift({
+        id: generateId("grant"),
+        userId: user.id,
+        userName: user.name,
+        userEmail: user.email,
+        tokens: delta,
+        reason,
+        grantedAt,
+        grantedBy: staff.email,
+      });
       await writeDb(db);
       return NextResponse.json({
-        user: sanitizeUser(db.users[idx]),
-        message: `Credited ${Math.floor(delta)} tokens to ${db.users[idx].name}.`,
+        user: sanitizeUser(user),
+        message: `Rewarded ${delta} tokens to ${user.name} (${user.email}).`,
       });
     }
 

@@ -20,9 +20,10 @@ function toPublicBook(book: BookRecord): BookRecord {
 
 export async function GET() {
   const db = await readDb();
-  return NextResponse.json({
-    books: db.books.map(toPublicBook),
-  });
+  return NextResponse.json(
+    { books: db.books.map(toPublicBook) },
+    { headers: { "Cache-Control": "public, no-store, max-age=0" } }
+  );
 }
 
 export async function POST(req: NextRequest) {
